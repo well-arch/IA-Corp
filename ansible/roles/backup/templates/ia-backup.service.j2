@@ -1,0 +1,10 @@
+[Unit]
+Description=Sauvegarde de la plateforme IA
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ia-backup
+Nice=10
+IOSchedulingClass=idle

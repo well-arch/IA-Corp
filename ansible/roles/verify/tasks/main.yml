@@ -1,0 +1,8 @@
+---
+- name: Vérifier le serveur GPU
+  ansible.builtin.import_tasks: gpu.yml
+  when: inventory_hostname in groups['ai_gpu']
+
+- name: Vérifier le serveur central
+  ansible.builtin.import_tasks: core.yml
+  when: inventory_hostname in groups['ai_core']

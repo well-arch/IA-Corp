@@ -1,0 +1,59 @@
+{
+	auto_https off
+	admin off
+	log {
+		output stdout
+		format json
+	}
+}
+
+(commun) {
+	tls /tls/fullchain.pem /tls/privkey.pem
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}
+
+# Interface employés
+{{ ia_fqdn_chat }}:443 {
+	import commun
+	reverse_proxy open-webui:8080 {
+		flush_interval -1
+	}
+}
+
+# SSO : la console d'administration n'est joignable que depuis les réseaux d'admin.
+{{ ia_fqdn_sso }}:443 {
+	import commun
+	@console_hors_admin {
+		path /admin*
+		not remote_ip {{ ia_admin_cidrs | join(' ') }}
+	}
+	respond @console_hors_admin 403
+	reverse_proxy keycloak:8080
+}
+
+# Passerelle modèles : administration et usage direct réservés aux réseaux d'admin.
+{{ ia_fqdn_llm }}:443 {
+	import commun
+	@hors_admin not remote_ip {{ ia_admin_cidrs | join(' ') }}
+	respond @hors_admin 403
+	reverse_proxy litellm:4000 {
+		flush_interval -1
+	}
+}
+
+{{ ia_fqdn_grafana }}:443 {
+	import commun
+	reverse_proxy grafana:3000
+}
+
+{{ ia_fqdn_langfuse }}:443 {
+	import commun
+	@hors_admin not remote_ip {{ ia_admin_cidrs | join(' ') }}
+	respond @hors_admin 403
+	reverse_proxy langfuse-web:3000
+}

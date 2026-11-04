@@ -1,0 +1,21 @@
+# Outillage local
+.venv/
+ansible/collections/
+.render/
+__pycache__/
+
+# Environnements réels : seul l'exemple est versionné tant qu'aucun dépôt privé
+# n'a été choisi pour les héberger.
+ansible/inventories/*
+!ansible/inventories/example/
+!ansible/inventories/example/**
+
+# Jamais de secrets ni de clés privées en clair
+.vault-pass*
+*.key
+*.pem
+ansible/inventories/*/pki/
+
+# Poids des modèles (téléchargés à part, vérifiés par empreinte)
+models-cache/
+*.safetensors

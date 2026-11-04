@@ -1,0 +1,48 @@
+---
+ia_domain: ia.test.local
+ia_admin_email: admin@test.local
+ia_uplink: eth0
+ia_user_cidrs: [10.10.0.0/16]
+ia_admin_cidrs: [10.99.0.0/24, 10.10.5.0/24]
+ia_dns_servers: [10.60.0.2]
+ia_ntp_servers: [10.60.0.2, ntp.test.local]
+ia_host_egress_allow:
+  - {cidr: 10.60.0.3/32, proto: tcp, port: 3128}
+ia_ldap_enabled: true
+ia_ldap_url: ldaps://dc01.test.local:636
+ia_ldap_ip: 10.20.0.10
+ia_ldap_bind_dn: CN=svc,DC=test,DC=local
+ia_ldap_users_dn: OU=Employes,DC=test,DC=local
+ia_ldap_groups_dn: OU=Groupes,DC=test,DC=local
+ia_ldap_user_filter: (memberOf:1.2.840.113556.1.4.1941:=CN=GG_IA_Utilisateurs,OU=Groupes,DC=test,DC=local)
+ia_tls_mode: provided
+ia_backup_repository: sftp:test@10.60.0.4:/depot
+
+# Valeurs factices, uniquement pour produire les fichiers.
+vault_postgres_password: test
+vault_pg_keycloak_password: test
+vault_pg_litellm_password: test
+vault_pg_openwebui_password: test
+vault_pg_langfuse_password: test
+vault_keycloak_admin_password: test
+vault_oidc_openwebui_secret: test
+vault_oidc_grafana_secret: test
+vault_oidc_langfuse_secret: test
+vault_ldap_bind_password: test
+vault_litellm_master_key: sk-test-master-key-0123456789
+vault_litellm_salt_key: test
+vault_litellm_openwebui_key: sk-test-openwebui-key-0123456789
+vault_vllm_api_key: test
+vault_webui_secret_key: test
+vault_qdrant_api_key: test
+vault_grafana_admin_password: test
+vault_langfuse_nextauth_secret: test
+vault_langfuse_salt: test
+vault_langfuse_encryption_key: "abcdef0000000000000000000000000000000000000000000000000000000000"
+vault_langfuse_public_key: pk-lf-test
+vault_langfuse_secret_key: sk-lf-test
+vault_langfuse_init_password: test-langfuse-init-password
+vault_clickhouse_password: test
+vault_redis_password: test
+vault_minio_password: test-minio-password
+vault_restic_password: test

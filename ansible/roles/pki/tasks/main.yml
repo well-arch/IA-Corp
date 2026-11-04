@@ -1,0 +1,54 @@
+---
+- name: Générer la CA et le certificat interne
+  ansible.builtin.import_tasks: internal_ca.yml
+  when: ia_tls_mode == 'internal_ca'
+
+- name: Vérifier les certificats fournis
+  ansible.builtin.assert:
+    that:
+      - ia_tls_ca_file | length > 0
+      - ia_tls_cert_file | default('') | length > 0
+      - ia_tls_key_file | default('') | length > 0
+    fail_msg: "ia_tls_mode=provided exige ia_tls_ca_file, ia_tls_cert_file et ia_tls_key_file."
+  when: ia_tls_mode == 'provided'
+
+- name: Installer les certificats sur l'hôte
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ ia_tls_dir }}/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - src: "{{ pki_ca_cert }}"
+      dest: ca.crt
+      mode: "0644"
+    - src: "{{ pki_host_cert }}"
+      dest: fullchain.pem
+      mode: "0644"
+    - src: "{{ pki_host_key }}"
+      dest: privkey.pem
+      mode: "0600"
+  loop_control:
+    label: "{{ item.dest }}"
+  register: pki_installed
+
+- name: Faire confiance à la CA au niveau du système
+  ansible.builtin.copy:
+    src: "{{ pki_ca_cert }}"
+    dest: /usr/local/share/ca-certificates/ia-platform.crt
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Mettre à jour les CA du système
+
+- name: Installer la CA de l'annuaire
+  ansible.builtin.copy:
+    src: "{{ ia_ldap_ca_file }}"
+    dest: "{{ ia_tls_dir }}/ldap-ca.crt"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - inventory_hostname in groups['ai_core']
+    - ia_ldap_enabled | bool

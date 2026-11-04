@@ -1,0 +1,45 @@
+---
+- name: Créer les dossiers de la pile centrale
+  ansible.builtin.file:
+    path: "{{ ia_core_dir }}/{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - ""
+    - keycloak
+    - postgres
+    - litellm
+    - prometheus
+    - grafana/provisioning/datasources
+    - grafana/provisioning/dashboards
+    - grafana/dashboards
+
+- name: Écrire les fichiers de la pile centrale
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ ia_core_dir }}/{{ item.dest }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {src: compose.yml.j2, dest: compose.yml, mode: "0640"}
+    - {src: env.j2, dest: .env, mode: "0600"}
+    - {src: Caddyfile.j2, dest: Caddyfile, mode: "0640"}
+    - {src: realm.json.j2, dest: keycloak/realm.json, mode: "0644"}
+    - {src: litellm.yaml.j2, dest: litellm/config.yaml, mode: "0644"}
+    - {src: prometheus.yml.j2, dest: prometheus/prometheus.yml, mode: "0644"}
+    - {src: grafana-datasource.yml.j2, dest: grafana/provisioning/datasources/prometheus.yml, mode: "0644"}
+  loop_control:
+    label: "{{ item.dest }}"
+  no_log: "{{ item.dest == '.env' }}"
+
+- name: Copier les fichiers statiques
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ ia_core_dir }}/{{ item.dest }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {src: postgres-init.sh, dest: postgres/init.sh, mode: "0755"}
+    - {src: prometheus-rules.yml, dest: prometheus/rules.yml, mode: "0644"}
+    - {src: grafana-dashboards.yml, dest: grafana/provisioning/dashboards/default.yml, mode: "0644"}
+    - {src: dashboard-plateforme.json, dest: grafana/dashboards/plateforme.json, mode: "0644"}
+  loop_control:
+    label: "{{ item.dest }}"

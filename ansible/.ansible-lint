@@ -1,0 +1,14 @@
+---
+profile: production
+exclude_paths:
+  - collections/
+  - inventories/
+skip_list:
+  # Les variables sont volontairement partagées entre rôles (préfixe ia_).
+  - var-naming[no-role-prefix]
+  # Noms et messages en français.
+  - name[casing]
+  # Les rôles sont internes à ce dépôt.
+  - meta-no-info
+  - meta-incorrect
+  - role-name

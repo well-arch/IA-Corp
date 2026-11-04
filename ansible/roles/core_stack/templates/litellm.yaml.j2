@@ -1,0 +1,42 @@
+# {{ ansible_managed | default('Géré par Ansible') }}
+# Un alias stable par rôle ; plusieurs serveurs GPU forment automatiquement un pool.
+model_list:
+{% for entry in ia_models %}
+{% set model = ia_model_catalog[entry.model] %}
+{% for host in groups['ai_gpu'] %}
+  - model_name: {{ model.alias }}
+    litellm_params:
+      model: hosted_vllm/{{ model.alias }}
+{% if model.kind == 'rerank' %}
+      api_base: https://{{ hostvars[host].ia_fqdn }}:{{ ia_gpu_port }}/{{ entry.model }}
+{% else %}
+      api_base: https://{{ hostvars[host].ia_fqdn }}:{{ ia_gpu_port }}/{{ entry.model }}/v1
+{% endif %}
+      api_key: os.environ/VLLM_API_KEY
+    model_info:
+      mode: {{ model.kind }}
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+{% endfor %}
+{% endfor %}
+
+litellm_settings:
+  drop_params: true
+  ssl_verify: /certs/ca.crt
+  callbacks: ["langfuse"]
+  # Métadonnées seulement, tant que le DPO et le CSE n'ont pas validé autre chose.
+  turn_off_message_logging: {{ (not (ia_log_conversation_content | bool)) | lower }}
+
+router_settings:
+  routing_strategy: least-busy
+  num_retries: 1
+  timeout: 600
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  # Attribue chaque requête à l'employé, transmis par Open WebUI.
+  user_header_name: X-OpenWebUI-User-Email
+  store_prompts_in_spend_logs: {{ ia_log_conversation_content | bool | lower }}
+  maximum_spend_logs_retention_period: {{ ia_spend_logs_retention }}
+  maximum_spend_logs_retention_interval: 1d

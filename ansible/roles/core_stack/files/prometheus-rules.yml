@@ -1,0 +1,32 @@
+groups:
+  - name: plateforme-ia
+    rules:
+      - alert: CibleInjoignable
+        expr: up == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.job }} ne répond plus sur {{ $labels.instance }}"
+
+      - alert: FileAttenteVllm
+        expr: sum by (modele) (vllm:num_requests_waiting) > 20
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Plus de 20 requêtes en attente sur {{ $labels.modele }} : saturation GPU"
+
+      - alert: GpuTropChaud
+        expr: DCGM_FI_DEV_GPU_TEMP > 85
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: "GPU {{ $labels.gpu }} au-dessus de 85 °C"
+
+      - alert: DisqueBientotPlein
+        expr: |
+          node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"} < 0.15
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "Moins de 15 % libres sur {{ $labels.mountpoint }} ({{ $labels.instance }})"

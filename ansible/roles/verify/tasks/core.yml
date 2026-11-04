@@ -1,0 +1,161 @@
+---
+- name: Central - lire l'état des conteneurs
+  ansible.builtin.command:
+    cmd: docker compose --project-name core ps --all --format json
+    chdir: "{{ ia_core_dir }}"
+  register: verify_core_ps
+  changed_when: false
+
+- name: Central - aucun conteneur arrêté ou en mauvaise santé
+  ansible.builtin.assert:
+    that:
+      - verify_core_bad | length == 0
+    fail_msg: "Conteneurs en défaut : {{ verify_core_bad }}"
+  vars:
+    verify_core_all: "{{ verify_core_ps.stdout_lines | map('from_json') | list }}"
+    verify_core_bad: >-
+      {{ verify_core_all | rejectattr('State', 'equalto', 'running') | map(attribute='Service') | list
+         + verify_core_all | selectattr('Health', 'equalto', 'unhealthy') | map(attribute='Service') | list }}
+
+- name: Central - le SSO publie la bonne identité, en TLS vérifié # noqa command-instead-of-module
+  ansible.builtin.command: >-
+    curl -fsS --cacert {{ ia_tls_dir }}/ca.crt
+    --resolve {{ ia_fqdn_sso }}:443:127.0.0.1
+    https://{{ ia_fqdn_sso }}/realms/ia/.well-known/openid-configuration
+  register: verify_oidc
+  changed_when: false
+  failed_when: (verify_oidc.stdout | from_json).issuer != 'https://' ~ ia_fqdn_sso ~ '/realms/ia'
+
+- name: Central - l'interface répond, en TLS vérifié # noqa command-instead-of-module
+  ansible.builtin.command: >-
+    curl -fsS -o /dev/null --cacert {{ ia_tls_dir }}/ca.crt
+    --resolve {{ ia_fqdn_chat }}:443:127.0.0.1
+    https://{{ ia_fqdn_chat }}/health
+  changed_when: false
+
+- name: Central - obtenir un jeton d'administration Keycloak
+  ansible.builtin.uri:
+    url: "{{ ia_keycloak_admin_url }}/realms/master/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      client_id: admin-cli
+      grant_type: password
+      username: admin
+      password: "{{ vault_keycloak_admin_password }}"
+  register: verify_kc_token
+  no_log: true
+
+- name: Central - le flux avec MFA doit être actif
+  ansible.builtin.uri:
+    url: "{{ ia_keycloak_admin_url }}/admin/realms/ia"
+    headers:
+      Authorization: "Bearer {{ verify_kc_token.json.access_token }}"
+  register: verify_kc_realm
+  failed_when: verify_kc_realm.json.browserFlow != 'browser-mfa'
+
+- name: Central - lancer une synchronisation complète de l'annuaire
+  when: ia_ldap_enabled | bool
+  block:
+    - name: Central - trouver le fournisseur LDAP
+      ansible.builtin.uri:
+        url: "{{ ia_keycloak_admin_url }}/admin/realms/ia/components?type=org.keycloak.storage.UserStorageProvider"
+        headers:
+          Authorization: "Bearer {{ verify_kc_token.json.access_token }}"
+      register: verify_kc_ldap
+
+    - name: Central - joindre l'AD et importer les comptes
+      ansible.builtin.uri:
+        url: "{{ ia_keycloak_admin_url }}/admin/realms/ia/user-storage/{{ verify_kc_ldap.json[0].id }}/sync?action=triggerFullSync"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ verify_kc_token.json.access_token }}"
+        timeout: 300
+      register: verify_kc_sync
+
+    - name: Central - afficher le résultat de la synchronisation
+      ansible.builtin.debug:
+        msg: "{{ verify_kc_sync.json.status }}"
+
+- name: Central - LiteLLM doit refuser un appel sans clé
+  ansible.builtin.uri:
+    url: http://127.0.0.1:4000/v1/models
+    status_code: 401
+
+- name: Central - la clé de service voit tous les alias
+  ansible.builtin.uri:
+    url: http://127.0.0.1:4000/v1/models
+    headers:
+      Authorization: "Bearer {{ vault_litellm_openwebui_key }}"
+  register: verify_models
+  failed_when: >-
+    (ia_models | map('extract', ia_model_catalog) | map(attribute='alias') | list)
+    | difference(verify_models.json.data | map(attribute='id') | list) | length > 0
+
+- name: Central - tester les modèles de conversation
+  ansible.builtin.uri:
+    url: http://127.0.0.1:4000/v1/chat/completions
+    method: POST
+    headers:
+      Authorization: "Bearer {{ vault_litellm_openwebui_key }}"
+    body_format: json
+    body:
+      model: "{{ item }}"
+      messages:
+        - {role: user, content: "Réponds uniquement : OK"}
+      max_tokens: 200
+    timeout: 300
+  register: verify_chat
+  failed_when: verify_chat.json.choices | length == 0
+  loop: "{{ ia_models | map('extract', ia_model_catalog) | selectattr('kind', 'equalto', 'chat') | map(attribute='alias') | list }}"
+
+- name: Central - tester les embeddings
+  ansible.builtin.uri:
+    url: http://127.0.0.1:4000/v1/embeddings
+    method: POST
+    headers:
+      Authorization: "Bearer {{ vault_litellm_openwebui_key }}"
+    body_format: json
+    body:
+      model: bge-m3
+      input: Procédure de demande de congés
+    timeout: 120
+  register: verify_embed
+  failed_when: verify_embed.json.data[0].embedding | length != 1024
+
+- name: Central - tester le reranker
+  ansible.builtin.uri:
+    url: http://127.0.0.1:4000/rerank
+    method: POST
+    headers:
+      Authorization: "Bearer {{ vault_litellm_openwebui_key }}"
+    body_format: json
+    body:
+      model: bge-reranker
+      query: Comment poser un congé ?
+      documents:
+        - La demande de congé se fait dans le portail RH.
+        - La cantine ouvre à midi.
+    timeout: 120
+  register: verify_rerank
+  failed_when: verify_rerank.json.results[0].index != 0
+
+- name: Central - un conteneur sans sortie ne doit rien joindre à l'extérieur
+  ansible.builtin.command:
+    cmd: >-
+      docker compose --project-name core exec -T open-webui
+      python3 -c "import socket; socket.create_connection(('{{ ia_verify_egress_target }}', 443), 3)"
+    chdir: "{{ ia_core_dir }}"
+  register: verify_core_egress_internal
+  changed_when: false
+  failed_when: verify_core_egress_internal.rc == 0
+
+- name: Central - le pare-feu doit bloquer Internet sur le réseau de sortie
+  ansible.builtin.command:
+    cmd: >-
+      docker compose --project-name core exec -T litellm
+      python3 -c "import socket; socket.create_connection(('{{ ia_verify_egress_target }}', 443), 3)"
+    chdir: "{{ ia_core_dir }}"
+  register: verify_core_egress_outbound
+  changed_when: false
+  failed_when: verify_core_egress_outbound.rc == 0

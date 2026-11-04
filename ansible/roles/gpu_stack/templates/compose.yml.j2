@@ -1,0 +1,89 @@
+# {{ ansible_managed | default('Géré par Ansible') }}
+name: gpu
+
+networks:
+  public: {}
+  # Sans passerelle : les processus d'inférence ne peuvent rien joindre à l'extérieur.
+  inference:
+    internal: true
+
+x-service: &service
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: 50m, max-file: "5"}
+
+services:
+  caddy:
+    <<: *service
+    image: {{ ia_image_mirror }}{{ ia_images.caddy }}
+    ports:
+      - "{{ ia_gpu_port }}:{{ ia_gpu_port }}"
+    networks: [public, inference]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - {{ ia_tls_dir }}/fullchain.pem:/tls/fullchain.pem:ro
+      - {{ ia_tls_dir }}/privkey.pem:/tls/privkey.pem:ro
+      - caddy_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 {{ ia_gpu_port }}"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+{% for entry in ia_models %}
+{% set model = ia_model_catalog[entry.model] %}
+  {{ entry.model | replace('_', '-') }}:
+    <<: *service
+    image: {{ ia_image_mirror }}{{ ia_images.vllm }}
+    runtime: nvidia
+    ipc: host
+    networks: [inference]
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "{{ entry.gpus }}"
+      VLLM_API_KEY: ${VLLM_API_KEY}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      VLLM_NO_USAGE_STATS: "1"
+      DO_NOT_TRACK: "1"
+    volumes:
+      - {{ ia_models_dir }}/{{ entry.model }}:/models/{{ entry.model }}:ro
+    command:
+      - /models/{{ entry.model }}
+      - --served-model-name={{ model.alias }}
+      - --host=0.0.0.0
+      - --port=8000
+      - --gpu-memory-utilization={{ entry.gpu_mem_util }}
+{% for arg in model.args %}
+      - {{ arg }}
+{% endfor %}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 1800s
+
+{% endfor %}
+  dcgm-exporter:
+    <<: *service
+    image: {{ ia_image_mirror }}{{ ia_images.dcgm_exporter }}
+    runtime: nvidia
+    cap_add: [SYS_ADMIN]
+    networks: [inference]
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+
+  node-exporter:
+    <<: *service
+    image: {{ ia_image_mirror }}{{ ia_images.node_exporter }}
+    network_mode: host
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address={{ ansible_host }}:9100
+    volumes:
+      - /:/host:ro,rslave
+
+volumes:
+  caddy_data:

@@ -1,0 +1,88 @@
+---
+- name: Installer restic
+  ansible.builtin.apt:
+    name: restic
+    state: present
+
+- name: Créer les dossiers de sauvegarde
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - "{{ ia_root }}/backup"
+    - "{{ ia_root }}/backup/dumps"
+
+- name: Écrire le mot de passe du dépôt
+  ansible.builtin.copy:
+    dest: "{{ ia_root }}/backup/restic-password"
+    content: "{{ vault_restic_password }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Écrire l'environnement de restic
+  ansible.builtin.copy:
+    dest: "{{ ia_root }}/backup/restic.env"
+    content: |
+      RESTIC_REPOSITORY={{ ia_backup_repository }}
+      RESTIC_PASSWORD_FILE={{ ia_root }}/backup/restic-password
+      {% for key, value in (ia_backup_env | default({})).items() %}
+      {{ key }}={{ value }}
+      {% endfor %}
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Installer le script de sauvegarde
+  ansible.builtin.template:
+    src: ia-backup.sh.j2
+    dest: /usr/local/sbin/ia-backup
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Installer le service et le minuteur
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - ia-backup.service
+    - ia-backup.timer
+  notify: Recharger systemd
+
+- name: Appliquer les unités systemd
+  ansible.builtin.meta: flush_handlers
+
+- name: Tester si le dépôt existe
+  ansible.builtin.shell: |
+    set -a; . {{ ia_root | quote }}/backup/restic.env; set +a
+    restic cat config
+  args:
+    executable: /bin/bash
+  register: backup_repo_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Initialiser le dépôt
+  ansible.builtin.shell: |
+    set -a; . {{ ia_root | quote }}/backup/restic.env; set +a
+    restic init
+  args:
+    executable: /bin/bash
+  when: backup_repo_check.rc != 0
+  changed_when: true
+
+- name: Activer le minuteur
+  ansible.builtin.systemd_service:
+    name: ia-backup.timer
+    enabled: true
+    state: started

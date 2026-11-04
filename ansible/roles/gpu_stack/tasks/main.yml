@@ -1,0 +1,15 @@
+---
+- name: Rendre la configuration
+  ansible.builtin.import_tasks: render.yml
+
+- name: Démarrer les services GPU
+  community.docker.docker_compose_v2:
+    project_src: "{{ ia_gpu_dir }}"
+    project_name: gpu
+    state: present
+    pull: missing
+    remove_orphans: true
+    wait: true
+    # Le chargement de gros poids en mémoire GPU peut durer plusieurs dizaines de minutes.
+    wait_timeout: 3600
+  environment: "{{ ia_proxy_env }}"

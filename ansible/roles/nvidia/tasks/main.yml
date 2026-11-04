@@ -1,0 +1,56 @@
+---
+- name: Installer le pilote NVIDIA
+  ansible.builtin.apt:
+    name: "{{ ia_nvidia_driver_package }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  register: nvidia_driver
+
+- name: Redémarrer pour charger le pilote # noqa no-handler
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+    msg: Chargement du pilote NVIDIA par Ansible
+  when: nvidia_driver.changed
+
+- name: Déclarer le dépôt du NVIDIA Container Toolkit
+  ansible.builtin.deb822_repository:
+    name: nvidia-container-toolkit
+    types: deb
+    uris: "{{ ia_nvidia_apt_url }}"
+    suites: /
+    signed_by: "{{ ia_nvidia_gpg_url }}"
+  environment: "{{ ia_proxy_env }}"
+  register: nvidia_repo
+
+- name: Installer le NVIDIA Container Toolkit
+  ansible.builtin.apt:
+    name: nvidia-container-toolkit
+    state: present
+    update_cache: "{{ nvidia_repo.changed }}"
+
+- name: Tester si le runtime NVIDIA est déjà déclaré
+  ansible.builtin.command: grep -q '"nvidia"' /etc/docker/daemon.json
+  register: nvidia_runtime_declared
+  changed_when: false
+  failed_when: nvidia_runtime_declared.rc not in [0, 1]
+  check_mode: false
+
+- name: Déclarer le runtime NVIDIA dans Docker
+  ansible.builtin.command: nvidia-ctk runtime configure --runtime=docker
+  changed_when: true
+  when: nvidia_runtime_declared.rc == 1
+  notify: Redémarrer Docker
+
+- name: Appliquer le runtime
+  ansible.builtin.meta: flush_handlers
+
+- name: Vérifier que le pilote voit les GPU
+  ansible.builtin.command: nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
+  register: nvidia_smi
+  changed_when: false
+  check_mode: false
+
+- name: Afficher les GPU détectés
+  ansible.builtin.debug:
+    var: nvidia_smi.stdout_lines

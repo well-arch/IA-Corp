@@ -1,0 +1,11 @@
+---
+- name: Importer le rendu de la configuration
+  ansible.builtin.import_tasks: render.yml
+
+- name: Activer nftables au démarrage
+  ansible.builtin.systemd_service:
+    name: nftables
+    enabled: true
+
+- name: Appliquer les règles sans attendre la fin du jeu
+  ansible.builtin.meta: flush_handlers

@@ -1,0 +1,4 @@
+---
+ia_keycloak_admin_url: http://127.0.0.1:8081
+# Adresse publique que la plateforme ne doit jamais pouvoir joindre.
+ia_verify_egress_target: 1.1.1.1

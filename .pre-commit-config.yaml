@@ -1,0 +1,20 @@
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.28.0
+    hooks:
+      - id: gitleaks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+  # Refuse tout vault.yml en clair, y compris si le .gitignore a été contourné.
+  - repo: local
+    hooks:
+      - id: vault-must-be-encrypted
+        name: les fichiers vault.yml sont chiffrés
+        language: system
+        files: (^|/)vault\.yml$
+        entry: bash -c 'for f in "$@"; do head -c 14 "$f" | grep -q "ANSIBLE_VAULT" || { echo "non chiffré : $f"; exit 1; }; done' --

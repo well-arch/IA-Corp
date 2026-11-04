@@ -1,0 +1,85 @@
+---
+# Tout est produit sur le poste Ansible : la clé de la CA ne va jamais sur un
+# serveur. Elle reste dans <inventaire>/pki, exclu de Git, à sauvegarder à part.
+- name: Créer le dossier de la PKI
+  ansible.builtin.file:
+    path: "{{ ia_pki_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Générer la clé de la CA
+  community.crypto.openssl_privatekey:
+    path: "{{ ia_pki_dir }}/ca.key"
+    type: ECC
+    curve: secp384r1
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Préparer la demande de la CA
+  community.crypto.openssl_csr_pipe:
+    privatekey_path: "{{ ia_pki_dir }}/ca.key"
+    common_name: "CA interne plateforme IA {{ ia_domain }}"
+    basic_constraints: ["CA:TRUE", "pathlen:0"]
+    basic_constraints_critical: true
+    key_usage: [keyCertSign, cRLSign]
+    key_usage_critical: true
+    name_constraints_permitted: "{{ ['DNS:' + ia_domain] }}"
+    name_constraints_critical: true
+  register: pki_ca_csr
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false
+
+- name: Signer le certificat de la CA
+  community.crypto.x509_certificate:
+    path: "{{ ia_pki_dir }}/ca.crt"
+    csr_content: "{{ pki_ca_csr.csr }}"
+    privatekey_path: "{{ ia_pki_dir }}/ca.key"
+    provider: selfsigned
+    selfsigned_not_after: "+3650d"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Générer la clé de l'hôte
+  community.crypto.openssl_privatekey:
+    path: "{{ ia_pki_dir }}/{{ inventory_hostname }}.key"
+    type: ECC
+    curve: secp256r1
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+
+- name: Préparer la demande de l'hôte
+  community.crypto.openssl_csr_pipe:
+    privatekey_path: "{{ ia_pki_dir }}/{{ inventory_hostname }}.key"
+    common_name: "{{ ia_fqdn }}"
+    subject_alt_name: "{{ pki_host_sans | map('regex_replace', '^', 'DNS:') | list }}"
+    extended_key_usage: [serverAuth]
+  vars:
+    pki_host_sans: >-
+      {{ [ia_fqdn] + ([ia_fqdn_chat, ia_fqdn_sso, ia_fqdn_llm, ia_fqdn_grafana, ia_fqdn_langfuse]
+         if inventory_hostname in groups['ai_core'] else []) }}
+  register: pki_host_csr
+  delegate_to: localhost
+  become: false
+  changed_when: false
+
+- name: Signer le certificat de l'hôte
+  community.crypto.x509_certificate:
+    path: "{{ ia_pki_dir }}/{{ inventory_hostname }}.crt"
+    csr_content: "{{ pki_host_csr.csr }}"
+    provider: ownca
+    ownca_path: "{{ ia_pki_dir }}/ca.crt"
+    ownca_privatekey_path: "{{ ia_pki_dir }}/ca.key"
+    ownca_not_after: "+825d"
+    mode: "0644"
+  delegate_to: localhost
+  become: false

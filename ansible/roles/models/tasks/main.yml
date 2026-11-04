@@ -1,0 +1,54 @@
+---
+# Les poids sont déposés à l'avance (make models-push) : le serveur GPU ne contacte
+# jamais Hugging Face. Ce rôle refuse tout modèle absent ou dont l'empreinte diffère.
+- name: Créer le dossier des modèles
+  ansible.builtin.file:
+    path: "{{ ia_models_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copier les empreintes de référence
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../models/manifests/{{ item.model }}.sha256"
+    dest: "{{ ia_models_dir }}/{{ item.model }}.sha256"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ ia_models }}"
+  loop_control:
+    label: "{{ item.model }}"
+
+- name: Vérifier l'empreinte SHA-256 des poids
+  ansible.builtin.command:
+    cmd: sha256sum --check --quiet --strict "{{ ia_models_dir }}/{{ item.model }}.sha256"
+    chdir: "{{ ia_models_dir }}/{{ item.model }}"
+  changed_when: false
+  check_mode: false
+  async: 3600
+  poll: 15
+  loop: "{{ ia_models }}"
+  loop_control:
+    label: "{{ item.model }}"
+
+- name: Rechercher les fichiers exécutables à l'ouverture (pickle)
+  ansible.builtin.find:
+    paths: "{{ ia_models_dir }}/{{ item.model }}"
+    patterns: ["*.bin", "*.pt", "*.pth", "*.pkl", "*.ckpt"]
+    recurse: true
+  register: models_pickle
+  loop: "{{ ia_models }}"
+  loop_control:
+    label: "{{ item.model }}"
+
+- name: Refuser le format pickle hors exception déclarée
+  ansible.builtin.assert:
+    that: >-
+      item.matched == 0 or
+      ia_model_catalog[item.item.model].allow_pickle | default(false)
+    fail_msg: "{{ item.item.model }} contient des fichiers pickle non autorisés : {{ item.files | map(attribute='path') | list }}"
+    quiet: true
+  loop: "{{ models_pickle.results }}"
+  loop_control:
+    label: "{{ item.item.model }}"

@@ -1,0 +1,90 @@
+---
+- name: Déclarer le dépôt Docker
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: deb
+    uris: "{{ ia_docker_apt_url }}"
+    suites: "{{ ansible_facts['distribution_release'] }}"
+    components: stable
+    architectures: amd64
+    signed_by: "{{ ia_docker_gpg_url }}"
+  environment: "{{ ia_proxy_env }}"
+  register: docker_repo
+
+- name: Installer Docker Engine et Compose
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-compose-plugin
+    state: present
+    update_cache: "{{ docker_repo.changed }}"
+
+- name: Créer la configuration du démon
+  ansible.builtin.file:
+    path: /etc/docker
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Lire la configuration existante du démon
+  ansible.builtin.slurp:
+    src: /etc/docker/daemon.json
+  register: docker_daemon_current
+  failed_when: false
+
+# Fusion, et non remplacement : le rôle nvidia ajoute son propre « runtime » ici.
+- name: Écrire la configuration du démon
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    content: "{{ docker_daemon_merged | to_nice_json }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  vars:
+    docker_daemon_existing: >-
+      {{ (docker_daemon_current.content | b64decode | from_json)
+         if docker_daemon_current.content is defined else {} }}
+    docker_daemon_merged: >-
+      {{ docker_daemon_existing | combine({
+           'data-root': ia_docker_data_root,
+           'log-driver': 'json-file',
+           'log-opts': {'max-size': '50m', 'max-file': '5'},
+           'live-restore': true,
+           'no-new-privileges': true
+         }) }}
+  notify: Redémarrer Docker
+
+- name: Créer le dossier de surcharge systemd
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: ia_http_proxy | length > 0
+
+- name: Configurer le proxy pour le téléchargement des images
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/docker.service.d/proxy.conf
+    content: |
+      [Service]
+      Environment="HTTP_PROXY={{ ia_http_proxy }}"
+      Environment="HTTPS_PROXY={{ ia_http_proxy }}"
+      Environment="NO_PROXY={{ ia_no_proxy }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: ia_http_proxy | length > 0
+  notify: Redémarrer Docker
+
+- name: Activer Docker
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Appliquer la configuration de Docker
+  ansible.builtin.meta: flush_handlers

@@ -1,0 +1,50 @@
+#!/bin/bash
+# Sauvegarde chiffrée hors du serveur. Géré par Ansible.
+# ClickHouse (traces Langfuse, reconstruisibles) et Prometheus sont exclus, car
+# leurs fichiers ne sont pas cohérents à chaud ; l'audit reste dans PostgreSQL.
+set -euo pipefail
+umask 077
+
+COMPOSE=(docker compose --project-directory {{ ia_core_dir | quote }} --project-name core)
+VOLUMES={{ ia_docker_data_root | quote }}/volumes
+DUMPS={{ (ia_root ~ '/backup/dumps') | quote }}
+
+set -a
+. {{ (ia_root ~ '/backup/restic.env') | quote }}
+set +a
+
+echo "== Dump PostgreSQL"
+"${COMPOSE[@]}" exec -T postgres pg_dumpall -U postgres | gzip > "$DUMPS/postgres.sql.gz.tmp"
+mv "$DUMPS/postgres.sql.gz.tmp" "$DUMPS/postgres.sql.gz"
+
+echo "== Instantané Qdrant"
+# L'image de Qdrant n'embarque pas de client HTTP : l'appel passe par le conteneur
+# LiteLLM, qui partage son réseau.
+"${COMPOSE[@]}" exec -T litellm python3 -c "
+import os, urllib.request as u
+r = u.Request('http://qdrant:6333/snapshots', method='POST',
+              headers={'api-key': '$(grep ^QDRANT_API_KEY= {{ (ia_core_dir ~ '/.env') | quote }} | cut -d= -f2-)'})
+u.urlopen(r, timeout=1800).read()
+"
+
+echo "== Envoi vers le dépôt restic"
+restic backup --tag ia \
+  "$DUMPS" \
+  {{ ia_core_dir | quote }} \
+  {{ ia_tls_dir | quote }} \
+  "$VOLUMES/core_openwebui_data" \
+  "$VOLUMES/core_qdrant_snapshots" \
+  "$VOLUMES/core_minio_data"
+
+echo "== Rotation"
+restic forget --tag ia --prune \
+  --keep-daily {{ ia_backup_keep_daily }} \
+  --keep-weekly {{ ia_backup_keep_weekly }} \
+  --keep-monthly {{ ia_backup_keep_monthly }}
+
+# Qdrant accumule ses instantanés : seul le plus récent reste sur le serveur.
+find "$VOLUMES/core_qdrant_snapshots/_data" -maxdepth 1 -type f -name '*.snapshot' \
+  -printf '%T@ %p\n' | sort -rn | tail -n +2 | cut -d' ' -f2- | xargs -r rm -f --
+
+echo "== Vérification d'un échantillon"
+restic check --read-data-subset=1%

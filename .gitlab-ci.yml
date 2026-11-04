@@ -1,0 +1,11 @@
+# Validation hors ligne, sans accès à l'infrastructure. Le déploiement reste manuel
+# (make deploy) depuis un poste d'administration situé dans le réseau de l'entreprise.
+validate:
+  image: python:3.12-slim
+  before_script:
+    - pip install -q -r requirements-dev.txt
+    - cd ansible && ansible-galaxy collection install -r requirements.yml -p collections >/dev/null && cd ..
+  script:
+    # Sans Docker dans ce job, les validateurs nft, caddy et promtool sont sautés :
+    # exécuter `make validate` sur le poste pour la vérification complète.
+    - tests/validate.sh all

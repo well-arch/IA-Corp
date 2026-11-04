@@ -1,0 +1,6 @@
+ansible-core>=2.18,<2.21
+ansible-lint>=25
+yamllint>=1.35
+cryptography>=43
+huggingface_hub[cli]>=0.30
+PyYAML>=6

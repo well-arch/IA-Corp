@@ -1,0 +1,35 @@
+---
+# Produit tous les fichiers de configuration sans contacter aucun serveur, pour les
+# valider dans la CI ou les relire. Voir tests/validate.sh.
+- name: Rendre les configurations
+  hosts: ai_core:ai_gpu
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    ia_render_only: true
+    ia_root: "{{ ia_render_dir }}/{{ inventory_hostname }}"
+    firewall_conf_path: "{{ ia_root }}/nftables.conf"
+  tasks:
+    - name: Créer le dossier de rendu
+      ansible.builtin.file:
+        path: "{{ ia_root }}"
+        state: directory
+        mode: "0755"
+
+    - name: Rendre le pare-feu
+      ansible.builtin.include_role:
+        name: firewall
+        tasks_from: render
+
+    - name: Rendre la pile GPU
+      ansible.builtin.include_role:
+        name: gpu_stack
+        tasks_from: render
+      when: inventory_hostname in groups['ai_gpu']
+
+    - name: Rendre la pile centrale
+      ansible.builtin.include_role:
+        name: core_stack
+        tasks_from: render
+      when: inventory_hostname in groups['ai_core']

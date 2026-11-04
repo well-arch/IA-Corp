@@ -1,0 +1,7 @@
+---
+# Contrôles post-déploiement : ils ne modifient que l'import des comptes de l'annuaire.
+- name: Vérifier la plateforme
+  hosts: ai_gpu:ai_core
+  gather_facts: false
+  roles:
+    - verify

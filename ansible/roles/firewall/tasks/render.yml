@@ -1,0 +1,10 @@
+---
+- name: Écrire les règles nftables
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: "{{ firewall_conf_path | default('/etc/nftables.conf') }}"
+    owner: "{{ omit if ia_render_only | default(false) else 'root' }}"
+    group: "{{ omit if ia_render_only | default(false) else 'root' }}"
+    mode: "0640"
+    validate: "{{ omit if ia_render_only | default(false) else '/usr/sbin/nft -c -f %s' }}"
+  notify: Appliquer nftables

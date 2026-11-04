@@ -1,0 +1,39 @@
+---
+# Toutes les valeurs ci-dessous sont des EXEMPLES à remplacer par celles de l'entreprise.
+# Liste complète des options : ansible/roles/ia_defaults/defaults/main.yml
+ansible_user: ansible
+
+ia_domain: ia.exemple.local
+ia_admin_email: admin.ia@exemple.local
+
+# pilot (1 GPU de 96 Go) ou production (2 GPU de 80 à 96 Go).
+ia_gpu_profile: production
+
+# --- Réseau ---
+# Postes autorisés à joindre l'interface, et postes d'administration.
+ia_user_cidrs: [10.10.0.0/16]
+ia_admin_cidrs: [10.99.0.0/24]
+ia_dns_servers: [10.60.0.2]
+ia_ntp_servers: [10.60.0.2]
+ia_http_proxy: http://10.60.0.3:3128
+ia_host_egress_allow:
+  - {cidr: 10.60.0.3/32, proto: tcp, port: 3128}   # proxy limité aux mises à jour
+  - {cidr: 10.60.0.4/32, proto: tcp, port: 22}     # cible de sauvegarde (SFTP)
+
+# --- Active Directory ---
+# Passer à false tant qu'aucun annuaire n'existe (aucun employé ne pourra se connecter
+# hors des comptes créés à la main dans Keycloak).
+ia_ldap_enabled: true
+ia_ldap_url: ldaps://dc01.exemple.local:636
+ia_ldap_ip: 10.20.0.10
+ia_ldap_bind_dn: CN=svc-ia-ldap,OU=Comptes de service,DC=exemple,DC=local
+ia_ldap_users_dn: OU=Employes,DC=exemple,DC=local
+ia_ldap_groups_dn: OU=Groupes,DC=exemple,DC=local
+ia_ldap_ca_file: "{{ inventory_dir }}/files/ad-ca.crt"
+# Importe uniquement les membres du groupe (récursif) :
+ia_ldap_user_filter: (memberOf:1.2.840.113556.1.4.1941:=CN=GG_IA_Utilisateurs,OU=Groupes,DC=exemple,DC=local)
+ia_group_users: GG_IA_Utilisateurs
+ia_group_admins: GG_IA_Admins
+
+# --- Sauvegarde ---
+ia_backup_repository: sftp:sauvegarde@10.60.0.4:/depots/plateforme-ia

@@ -1,0 +1,94 @@
+#!/usr/sbin/nft -f
+# {{ ansible_managed | default('Géré par Ansible') }}
+#
+# Table dédiée, sans « flush ruleset » : les règles de Docker restent intactes.
+# La chaîne forward passe avant celles de Docker (priorité -10) : un « drop » y est
+# définitif, un « accept » laisse Docker appliquer ses propres règles ensuite.
+table inet ia_guard {}
+delete table inet ia_guard
+
+{% set is_core = inventory_hostname in groups['ai_core'] %}
+{% set core_ips = groups['ai_core'] | map('extract', hostvars, 'ansible_host') | list %}
+{% set gpu_ips = groups['ai_gpu'] | map('extract', hostvars, 'ansible_host') | list %}
+table inet ia_guard {
+    set admin_nets {
+        type ipv4_addr; flags interval;
+        elements = { {{ ia_admin_cidrs | join(', ') }} }
+    }
+{% if is_core %}
+    set client_nets {
+        type ipv4_addr; flags interval; auto-merge;
+        elements = { {{ (ia_user_cidrs + ia_admin_cidrs) | join(', ') }} }
+    }
+{% else %}
+    set core_hosts {
+        type ipv4_addr;
+        elements = { {{ core_ips | join(', ') }} }
+    }
+{% endif %}
+
+    chain input {
+        type filter hook input priority filter; policy drop;
+        ct state established,related accept
+        ct state invalid drop
+        iifname "lo" accept
+        icmp type { echo-request, destination-unreachable, time-exceeded } accept
+        icmpv6 type { echo-request, destination-unreachable, packet-too-big, time-exceeded, nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert } accept
+        ip saddr @admin_nets tcp dport 22 accept
+{% if is_core %}
+        # Prometheus (réseau Docker « outbound ») vers node-exporter de cet hôte.
+        ip saddr {{ ia_outbound_subnet }} tcp dport 9100 accept
+{% else %}
+        ip saddr @core_hosts tcp dport 9100 accept
+{% endif %}
+    }
+
+    chain forward {
+        type filter hook forward priority filter - 10; policy accept;
+        ct state established,related accept
+
+        # Entrée : seuls les ports publiés volontairement, depuis les réseaux prévus.
+{% if is_core %}
+        iifname "{{ ia_uplink }}" ct status dnat ip saddr @client_nets tcp dport 443 accept
+{% else %}
+        iifname "{{ ia_uplink }}" ct status dnat ip saddr @core_hosts tcp dport {{ ia_gpu_port }} accept
+{% endif %}
+        iifname "{{ ia_uplink }}" drop
+
+        # Sortie des conteneurs : aucun accès Internet, seulement les flux listés.
+{% if is_core %}
+{% for ip in gpu_ips %}
+        oifname "{{ ia_uplink }}" ip daddr {{ ip }} tcp dport { {{ ia_gpu_port }}, 9100 } accept
+{% endfor %}
+{% if ia_ldap_enabled | bool %}
+        oifname "{{ ia_uplink }}" ip daddr {{ ia_ldap_ip }} tcp dport {{ ia_ldap_port }} accept
+{% endif %}
+{% endif %}
+        oifname "{{ ia_uplink }}" drop
+    }
+{% if ia_firewall_restrict_host_egress | bool %}
+
+    chain output {
+        type filter hook output priority filter; policy drop;
+        ct state established,related accept
+        # Trafic local et vers les ponts Docker.
+        oifname != "{{ ia_uplink }}" accept
+        icmp type { echo-request } accept
+        icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit } accept
+{% for server in ia_dns_servers %}
+        ip daddr {{ server }} meta l4proto { tcp, udp } th dport 53 accept
+{% endfor %}
+{% for server in ia_ntp_servers %}
+{% if server is match('^[0-9.]+$') %}
+        ip daddr {{ server }} udp dport 123 accept
+{% endif %}
+{% endfor %}
+{% if ia_ldap_enabled | bool and is_core %}
+        ip daddr {{ ia_ldap_ip }} tcp dport {{ ia_ldap_port }} accept
+{% endif %}
+{% for rule in ia_host_egress_allow %}
+        ip daddr {{ rule.cidr }} {{ rule.proto | default('tcp') }} dport {{ rule.port }} accept
+{% endfor %}
+    }
+{% endif %}
+}

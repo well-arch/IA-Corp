@@ -1,0 +1,38 @@
+---
+- name: GPU - lire l'état des conteneurs
+  ansible.builtin.command:
+    cmd: docker compose --project-name gpu ps --all --format json
+    chdir: "{{ ia_gpu_dir }}"
+  register: verify_gpu_ps
+  changed_when: false
+
+- name: GPU - aucun conteneur arrêté ou en mauvaise santé
+  ansible.builtin.assert:
+    that:
+      - verify_gpu_bad | length == 0
+    fail_msg: "Conteneurs en défaut : {{ verify_gpu_bad }}"
+  vars:
+    verify_gpu_all: "{{ verify_gpu_ps.stdout_lines | map('from_json') | list }}"
+    verify_gpu_bad: >-
+      {{ verify_gpu_all | rejectattr('State', 'equalto', 'running') | map(attribute='Service') | list
+         + verify_gpu_all | selectattr('Health', 'equalto', 'unhealthy') | map(attribute='Service') | list }}
+
+- name: GPU - un appel sans clé doit être refusé # noqa command-instead-of-module
+  ansible.builtin.command: >-
+    curl -sS -o /dev/null -w '%{http_code}'
+    --cacert {{ ia_tls_dir }}/ca.crt
+    --resolve {{ ia_fqdn }}:{{ ia_gpu_port }}:127.0.0.1
+    https://{{ ia_fqdn }}:{{ ia_gpu_port }}/{{ ia_models[0].model }}/v1/models
+  register: verify_gpu_noauth
+  changed_when: false
+  failed_when: verify_gpu_noauth.stdout != '401'
+
+- name: GPU - un conteneur d'inférence ne doit rien joindre à l'extérieur
+  ansible.builtin.command:
+    cmd: >-
+      docker compose --project-name gpu exec -T {{ ia_models[0].model | replace('_', '-') }}
+      python3 -c "import socket; socket.create_connection(('{{ ia_verify_egress_target }}', 443), 3)"
+    chdir: "{{ ia_gpu_dir }}"
+  register: verify_gpu_egress
+  changed_when: false
+  failed_when: verify_gpu_egress.rc == 0

@@ -1,0 +1,35 @@
+---
+# Une clé par service consommateur, jamais la clé maîtresse.
+- name: Attendre que LiteLLM réponde
+  ansible.builtin.uri:
+    url: http://127.0.0.1:4000/health/liveliness
+  register: litellm_ready
+  until: litellm_ready.status == 200
+  retries: 30
+  delay: 5
+
+- name: Vérifier la clé de service d'Open WebUI
+  ansible.builtin.uri:
+    url: http://127.0.0.1:4000/key/info?key={{ vault_litellm_openwebui_key }}
+    headers:
+      Authorization: "Bearer {{ vault_litellm_master_key }}"
+    status_code: [200, 400, 404]
+  register: litellm_key_info
+  no_log: true
+
+- name: Créer la clé de service d'Open WebUI
+  ansible.builtin.uri:
+    url: http://127.0.0.1:4000/key/generate
+    method: POST
+    headers:
+      Authorization: "Bearer {{ vault_litellm_master_key }}"
+    body_format: json
+    body:
+      key: "{{ vault_litellm_openwebui_key }}"
+      key_alias: open-webui
+      max_parallel_requests: "{{ ia_openwebui_max_parallel }}"
+      rpm_limit: "{{ ia_openwebui_rpm_limit }}"
+    status_code: 200
+  when: litellm_key_info.status != 200
+  changed_when: true
+  no_log: true

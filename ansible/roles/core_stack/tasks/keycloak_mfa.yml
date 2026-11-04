@@ -1,0 +1,132 @@
+---
+# Le flux par défaut de Keycloak ne demande l'OTP qu'aux comptes déjà équipés, et les
+# actions requises par défaut ne s'appliquent pas aux comptes importés de l'annuaire.
+# Seul un flux avec OTP « REQUIRED » force donc l'enrôlement de tous les employés.
+- name: Attendre que Keycloak réponde
+  ansible.builtin.uri:
+    url: "{{ ia_keycloak_admin_url }}/realms/master"
+  register: keycloak_ready
+  until: keycloak_ready.status == 200
+  retries: 60
+  delay: 5
+
+- name: Obtenir un jeton d'administration
+  ansible.builtin.uri:
+    url: "{{ ia_keycloak_admin_url }}/realms/master/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      client_id: admin-cli
+      grant_type: password
+      username: admin
+      password: "{{ vault_keycloak_admin_password }}"
+  register: keycloak_token
+  no_log: true
+
+- name: Lister les flux du royaume
+  ansible.builtin.uri:
+    url: "{{ ia_keycloak_admin_url }}/admin/realms/ia/authentication/flows"
+    headers: &keycloak_auth
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+  register: keycloak_flows
+
+- name: Créer le flux de connexion avec MFA obligatoire
+  when: keycloak_flows.json | selectattr('alias', 'equalto', 'browser-mfa') | list | length == 0
+  block:
+    - name: Créer le flux principal
+      ansible.builtin.uri:
+        url: "{{ ia_keycloak_admin_url }}/admin/realms/ia/authentication/flows"
+        method: POST
+        headers: *keycloak_auth
+        body_format: json
+        body:
+          alias: browser-mfa
+          description: Session existante, ou identifiant, mot de passe et OTP
+          providerId: basic-flow
+          topLevel: true
+          builtIn: false
+        status_code: 201
+      changed_when: true
+
+    - name: Ajouter la reprise de session
+      ansible.builtin.uri:
+        url: "{{ ia_keycloak_admin_url }}/admin/realms/ia/authentication/flows/browser-mfa/executions/execution"
+        method: POST
+        headers: *keycloak_auth
+        body_format: json
+        body:
+          provider: auth-cookie
+        status_code: 201
+      changed_when: true
+
+    - name: Ajouter le sous-flux de saisie
+      ansible.builtin.uri:
+        url: "{{ ia_keycloak_admin_url }}/admin/realms/ia/authentication/flows/browser-mfa/executions/flow"
+        method: POST
+        headers: *keycloak_auth
+        body_format: json
+        body:
+          alias: browser-mfa-forms
+          type: basic-flow
+          provider: registration-page-form
+          description: Identifiant, mot de passe puis OTP
+        status_code: 201
+      changed_when: true
+
+    - name: Ajouter les formulaires
+      ansible.builtin.uri:
+        url: "{{ ia_keycloak_admin_url }}/admin/realms/ia/authentication/flows/browser-mfa-forms/executions/execution"
+        method: POST
+        headers: *keycloak_auth
+        body_format: json
+        body:
+          provider: "{{ item }}"
+        status_code: 201
+      changed_when: true
+      loop:
+        - auth-username-password-form
+        - auth-otp-form
+
+- name: Lire les étapes du flux
+  ansible.builtin.uri:
+    url: "{{ ia_keycloak_admin_url }}/admin/realms/ia/authentication/flows/browser-mfa/executions"
+    headers: *keycloak_auth
+  register: keycloak_executions
+
+- name: Fixer les exigences de chaque étape
+  ansible.builtin.uri:
+    url: "{{ ia_keycloak_admin_url }}/admin/realms/ia/authentication/flows/browser-mfa/executions"
+    method: PUT
+    headers: *keycloak_auth
+    body_format: json
+    body: "{{ item | combine({'requirement': keycloak_required[item.providerId | default(item.displayName)]}) }}"
+    status_code: [202, 204]
+  vars:
+    keycloak_required:
+      auth-cookie: ALTERNATIVE
+      browser-mfa-forms: ALTERNATIVE
+      auth-username-password-form: REQUIRED
+      auth-otp-form: REQUIRED
+  loop: "{{ keycloak_executions.json }}"
+  loop_control:
+    label: "{{ item.providerId | default(item.displayName) }}"
+  when: item.requirement != keycloak_required[item.providerId | default(item.displayName)]
+  changed_when: true
+
+- name: Lire le royaume
+  ansible.builtin.uri:
+    url: "{{ ia_keycloak_admin_url }}/admin/realms/ia"
+    headers: *keycloak_auth
+  register: keycloak_realm
+
+- name: Activer le flux avec MFA
+  ansible.builtin.uri:
+    url: "{{ ia_keycloak_admin_url }}/admin/realms/ia"
+    method: PUT
+    headers: *keycloak_auth
+    body_format: json
+    body:
+      browserFlow: browser-mfa
+    status_code: 204
+  when: keycloak_realm.json.browserFlow != 'browser-mfa'
+  changed_when: true

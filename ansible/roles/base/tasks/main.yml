@@ -1,0 +1,75 @@
+---
+- name: Configurer le proxy d'apt
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/95ia-proxy
+    content: |
+      Acquire::http::Proxy "{{ ia_http_proxy }}";
+      Acquire::https::Proxy "{{ ia_http_proxy }}";
+    owner: root
+    group: root
+    mode: "0644"
+  when: ia_http_proxy | length > 0
+
+- name: Installer les paquets de base
+  ansible.builtin.apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - chrony
+      - curl
+      - jq
+      - nftables
+      - pciutils
+      - python3-debian
+      - python3-yaml
+      - unattended-upgrades
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Activer les mises à jour de sécurité automatiques
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Interdire la connexion SSH par mot de passe
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/50-ia.conf
+    content: |
+      PasswordAuthentication no
+      PermitRootLogin prohibit-password
+      X11Forwarding no
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Recharger SSH
+
+- name: Configurer NTP
+  ansible.builtin.copy:
+    dest: /etc/chrony/conf.d/ia.conf
+    content: |
+      {% for server in ia_ntp_servers %}
+      server {{ server }} iburst
+      {% endfor %}
+    owner: root
+    group: root
+    mode: "0644"
+  when: ia_ntp_servers | length > 0
+  notify: Redémarrer chrony
+
+- name: Créer l'arborescence de la plateforme
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ ia_docker_data_root }}", mode: "0711"}
+    - {path: "{{ ia_tls_dir }}", mode: "0755"}

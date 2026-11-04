@@ -1,0 +1,22 @@
+{
+	auto_https off
+	admin off
+}
+
+{{ ia_fqdn }}:{{ ia_gpu_port }} {
+	tls /tls/fullchain.pem /tls/privkey.pem
+
+{% for entry in ia_models %}
+	handle_path /{{ entry.model }}/* {
+		reverse_proxy {{ entry.model | replace('_', '-') }}:8000 {
+			flush_interval -1
+		}
+	}
+{% endfor %}
+	handle_path /dcgm/* {
+		reverse_proxy dcgm-exporter:9400
+	}
+	handle {
+		respond 404
+	}
+}

@@ -1,0 +1,4 @@
+---
+pki_ca_cert: "{{ (ia_pki_dir ~ '/ca.crt') if ia_tls_mode == 'internal_ca' else ia_tls_ca_file }}"
+pki_host_cert: "{{ (ia_pki_dir ~ '/' ~ inventory_hostname ~ '.crt') if ia_tls_mode == 'internal_ca' else ia_tls_cert_file }}"
+pki_host_key: "{{ (ia_pki_dir ~ '/' ~ inventory_hostname ~ '.key') if ia_tls_mode == 'internal_ca' else ia_tls_key_file }}"

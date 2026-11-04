@@ -1,0 +1,207 @@
+---
+# Valeurs par défaut de toute la plateforme. Ce rôle ne contient aucune tâche :
+# les autres rôles en dépendent pour partager ces variables, et l'inventaire de
+# chaque environnement peut toutes les surcharger.
+
+# --- Arborescence sur les serveurs (doit être sur un volume chiffré) ----------
+ia_root: /srv/ia
+ia_docker_data_root: "{{ ia_root }}/docker"
+ia_models_dir: "{{ ia_root }}/models"
+ia_tls_dir: "{{ ia_root }}/tls"
+ia_core_dir: "{{ ia_root }}/core"
+ia_gpu_dir: "{{ ia_root }}/gpu"
+
+# --- Noms de service, dérivés du domaine interne ------------------------------
+ia_fqdn_chat: "assistant.{{ ia_domain }}"
+ia_fqdn_sso: "sso.{{ ia_domain }}"
+ia_fqdn_llm: "llm.{{ ia_domain }}"
+ia_fqdn_grafana: "grafana.{{ ia_domain }}"
+ia_fqdn_langfuse: "langfuse.{{ ia_domain }}"
+ia_gpu_port: 8443
+
+# --- Images, figées --------------------------------------------------------
+# Les releases sorties depuis moins de 48 h à la date du figeage ont été écartées.
+# Avec un registre interne : ia_image_mirror: "registry.exemple.local/miroir/"
+# (scripts/mirror-images.sh recopie ces images vers ce registre).
+ia_image_mirror: ""
+ia_images:
+  caddy: docker.io/library/caddy:2.11.7-alpine
+  postgres: docker.io/library/postgres:17.11-trixie
+  keycloak: quay.io/keycloak/keycloak:26.8.1
+  litellm: ghcr.io/berriai/litellm:v1.106.6
+  open_webui: ghcr.io/open-webui/open-webui:v0.12.5
+  qdrant: docker.io/qdrant/qdrant:v1.20.0
+  docling: ghcr.io/docling-project/docling-serve-cpu:v1.38.2
+  langfuse_web: docker.io/langfuse/langfuse:4.73.0
+  langfuse_worker: docker.io/langfuse/langfuse-worker:4.73.0
+  clickhouse: docker.io/clickhouse/clickhouse-server:26.3.62.3
+  redis: docker.io/library/redis:7.4.12
+  # Chainguard ne publie gratuitement que « latest » : figée par empreinte.
+  minio: cgr.dev/chainguard/minio@sha256:3c60a2a8c4d33409a9bc7a623a7fcbfb4605adc3d89422d2f53b3f673a6e5597
+  prometheus: docker.io/prom/prometheus:v3.15.1
+  grafana: docker.io/grafana/grafana:13.3.0
+  node_exporter: docker.io/prom/node-exporter:v1.11.0
+  dcgm_exporter: docker.io/nvidia/dcgm-exporter:4.8.4
+  vllm: docker.io/vllm/vllm-openai:v0.32.0
+
+# --- Modèles -----------------------------------------------------------------
+# Les applications n'appellent que les alias (assistant, assistant-leger, bge-m3,
+# bge-reranker) : changer de modèle ne demande aucune réécriture.
+# gpu_mem_util est la part de CHAQUE GPU listé réservée à ce processus vLLM ; la
+# somme par GPU doit rester sous 1 (contrôlé par le rôle preflight).
+ia_gpu_profile: production
+
+ia_model_catalog:
+  mistral_small_4:
+    alias: assistant
+    kind: chat
+    repo: mistralai/Mistral-Small-4-119B-2603-NVFP4
+    revision: 45331841b631f4e281df8e959ea3cc9beb84298a
+    # Recette de la fiche du modèle (tensor-parallel 2 : deux GPU obligatoires).
+    args:
+      - --max-model-len=262144
+      - --tensor-parallel-size=2
+      - --attention-backend=TRITON_MLA
+      - --tool-call-parser=mistral
+      - --enable-auto-tool-choice
+      - --reasoning-parser=mistral
+      - --max-num-batched-tokens=16384
+      - --max-num-seqs=128
+  gemma_4_26b:
+    alias: assistant
+    kind: chat
+    repo: google/gemma-4-26B-A4B-it
+    revision: 4d7ae4984b7db7de8f8457170b3f1a419ee76d52
+    args:
+      - --tool-call-parser=gemma4
+      - --enable-auto-tool-choice
+      - --reasoning-parser=gemma4
+  gemma_4_e4b:
+    alias: assistant-leger
+    kind: chat
+    repo: google/gemma-4-E4B-it
+    revision: 4ecc2ba63bcac23ba4a767fc87025b1450f84c9c
+    args:
+      - --tool-call-parser=gemma4
+      - --enable-auto-tool-choice
+      - --reasoning-parser=gemma4
+  bge_m3:
+    alias: bge-m3
+    kind: embedding
+    repo: BAAI/bge-m3
+    revision: 5617a9f61b028005a4858fdac845db406aefb181
+    # Ce dépôt ne publie que pytorch_model.bin (format pickle), sans safetensors.
+    # Exception assumée : empreinte figée, voir docs/couverture-roadmap.md.
+    allow_pickle: true
+    args:
+      - --runner=pooling
+      - --convert=embed
+  bge_reranker:
+    alias: bge-reranker
+    kind: rerank
+    repo: BAAI/bge-reranker-v2-m3
+    revision: 953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e
+    args:
+      - --runner=pooling
+
+# Répartition par configuration matérielle de la roadmap. Valeurs calculées pour
+# des GPU de 96 Go : à ajuster avec les tests de charge sur le vrai matériel.
+ia_model_profiles:
+  # 1 serveur, 1 GPU de 96 Go (pour 48 Go : prendre gemma_4_e4b comme assistant).
+  pilot:
+    - {model: gemma_4_26b, gpus: "0", gpu_mem_util: 0.78}
+    - {model: bge_m3, gpus: "0", gpu_mem_util: 0.06}
+    - {model: bge_reranker, gpus: "0", gpu_mem_util: 0.06}
+  # 1 serveur, 2 GPU de 80 à 96 Go.
+  production:
+    - {model: mistral_small_4, gpus: "0,1", gpu_mem_util: 0.70}
+    - {model: gemma_4_e4b, gpus: "1", gpu_mem_util: 0.25}
+    - {model: bge_m3, gpus: "0", gpu_mem_util: 0.08}
+    - {model: bge_reranker, gpus: "0", gpu_mem_util: 0.08}
+
+# Modèles effectivement déployés (surchargeable pour une répartition sur mesure).
+ia_models: "{{ ia_model_profiles[ia_gpu_profile] }}"
+
+# --- Annuaire ---------------------------------------------------------------
+ia_ldap_enabled: true
+ia_ldap_vendor: ad
+ia_ldap_username_attribute: sAMAccountName
+ia_ldap_uuid_attribute: objectGUID
+ia_ldap_rdn_attribute: cn
+ia_ldap_user_object_classes: person, organizationalPerson, user
+ia_ldap_user_filter: ""
+ia_ldap_port: 636
+ia_ldap_full_sync_seconds: 86400
+ia_ldap_changed_sync_seconds: 300
+ia_group_users: GG_IA_Utilisateurs
+ia_group_admins: GG_IA_Admins
+# Fichier sur le poste Ansible : CA ayant signé le certificat LDAPS de l'AD.
+ia_ldap_ca_file: ""
+
+# Durée maximale d'une session Open WebUI : c'est aussi le délai maximal avant qu'un
+# compte désactivé dans l'AD perde l'accès à l'interface (voir docs/exploitation.md).
+ia_session_lifetime: 8h
+
+# --- TLS --------------------------------------------------------------------
+# internal_ca : une CA dédiée est générée sur le poste Ansible.
+# provided    : certificats émis par la PKI de l'entreprise (ia_tls_ca_file sur le
+#               poste Ansible, ia_tls_cert_file/ia_tls_key_file pour chaque hôte).
+ia_tls_mode: internal_ca
+ia_pki_dir: "{{ inventory_dir }}/pki"
+ia_tls_ca_file: ""
+
+# --- Réseau -----------------------------------------------------------------
+ia_uplink: "{{ ansible_facts['default_ipv4']['interface'] | default('') }}"
+ia_outbound_subnet: 172.30.0.0/24
+ia_http_proxy: ""
+ia_no_proxy: "localhost,127.0.0.1,.{{ ia_domain }}"
+ia_proxy_env: "{{ {'http_proxy': ia_http_proxy, 'https_proxy': ia_http_proxy, 'no_proxy': ia_no_proxy} if ia_http_proxy | length > 0 else {} }}"
+# Interdit toute sortie de l'hôte hors de ia_host_egress_allow.
+ia_firewall_restrict_host_egress: true
+ia_dns_servers: []
+ia_ntp_servers: []
+# Liste de {cidr, proto, port} : proxy, miroirs, cible de sauvegarde…
+ia_host_egress_allow: []
+
+# --- Sécurité ---------------------------------------------------------------
+ia_require_encrypted_disk: true
+ia_supported_os: ["24.04"]
+
+# --- Paquets ----------------------------------------------------------------
+ia_docker_apt_url: https://download.docker.com/linux/ubuntu
+ia_docker_gpg_url: https://download.docker.com/linux/ubuntu/gpg
+ia_nvidia_apt_url: https://nvidia.github.io/libnvidia-container/stable/deb/amd64
+ia_nvidia_gpg_url: https://nvidia.github.io/libnvidia-container/gpgkey
+ia_nvidia_driver_package: nvidia-driver-580-server
+
+# --- Journalisation : contenu des conversations -------------------------------
+# false : Langfuse et LiteLLM ne reçoivent que des métadonnées (qui, quel modèle,
+# quand, combien). Ne passer à true qu'après validation par le DPO et le CSE.
+ia_log_conversation_content: false
+ia_spend_logs_retention: 90d
+ia_keycloak_events_retention_seconds: 7776000
+
+# --- Sauvegarde --------------------------------------------------------------
+ia_backup_enabled: true
+ia_backup_repository: ""
+ia_backup_schedule: "*-*-* 02:30:00"
+ia_backup_keep_daily: 7
+ia_backup_keep_weekly: 4
+ia_backup_keep_monthly: 12
+
+# --- Secrets contrôlés par le rôle preflight ----------------------------------
+ia_preflight_secrets:
+  - "{{ vault_vllm_api_key }}"
+  - "{{ vault_postgres_password }}"
+  - "{{ vault_keycloak_admin_password }}"
+  - "{{ vault_ldap_bind_password if ia_ldap_enabled | bool else 'non-utilise' }}"
+  - "{{ vault_litellm_master_key }}"
+  - "{{ vault_restic_password if ia_backup_enabled | bool else 'non-utilise' }}"
+
+# --- Divers -----------------------------------------------------------------
+ia_prometheus_retention: 30d
+# Plafonds de la clé de service d'Open WebUI dans LiteLLM.
+ia_openwebui_max_parallel: 100
+ia_openwebui_rpm_limit: 2000
+ia_langfuse_org_name: Entreprise
+ia_langfuse_project_name: assistant-ia

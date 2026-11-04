@@ -1,0 +1,39 @@
+---
+# Déploiement complet et rejouable. Le serveur GPU démarre d'abord, car LiteLLM en
+# dépend. Le pare-feu passe après Docker, dont il complète les règles.
+- name: Contrôler les prérequis de tous les serveurs
+  hosts: ai_core:ai_gpu
+  gather_facts: true
+  tags: [preflight, always]
+  roles:
+    - preflight
+
+- name: Préparer le système de tous les serveurs
+  hosts: ai_core:ai_gpu
+  tags: [system]
+  roles:
+    - base
+    - pki
+    - docker
+    - firewall
+
+- name: Déployer le serveur GPU
+  hosts: ai_gpu
+  tags: [gpu]
+  roles:
+    - nvidia
+    - models
+    - gpu_stack
+
+- name: Déployer le serveur central
+  hosts: ai_core
+  tags: [core]
+  roles:
+    - core_stack
+
+- name: Configurer la sauvegarde
+  hosts: ai_core
+  tags: [backup]
+  roles:
+    - role: backup
+      when: ia_backup_enabled | bool

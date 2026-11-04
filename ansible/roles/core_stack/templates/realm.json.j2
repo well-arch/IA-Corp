@@ -1,0 +1,151 @@
+{#- Keycloak ne lit ce fichier qu'à la création du royaume ; les secrets y restent des
+    références ${VAR}, résolues par Keycloak depuis l'environnement du conteneur. -#}
+{%- macro group_mapper() -%}
+{
+  "name": "groupes",
+  "protocol": "openid-connect",
+  "protocolMapper": "oidc-group-membership-mapper",
+  "config": {
+    "claim.name": "groups",
+    "full.path": "false",
+    "id.token.claim": "true",
+    "access.token.claim": "true",
+    "userinfo.token.claim": "true"
+  }
+}
+{%- endmacro -%}
+{%- macro client(id, name, secret_var, redirect, base) -%}
+{
+  "clientId": "{{ id }}",
+  "name": "{{ name }}",
+  "enabled": true,
+  "protocol": "openid-connect",
+  "publicClient": false,
+  "secret": "${{ '{' }}{{ secret_var }}{{ '}' }}",
+  "standardFlowEnabled": true,
+  "directAccessGrantsEnabled": false,
+  "implicitFlowEnabled": false,
+  "serviceAccountsEnabled": false,
+  "redirectUris": ["{{ redirect }}"],
+  "webOrigins": ["+"],
+  "baseUrl": "{{ base }}",
+  "attributes": {"pkce.code.challenge.method": "S256", "post.logout.redirect.uris": "{{ base }}/*"},
+  "protocolMappers": [{{ group_mapper() }}]
+}
+{%- endmacro -%}
+{%- macro attr_mapper(name, ldap, model, mandatory) -%}
+{
+  "name": "{{ name }}",
+  "providerId": "user-attribute-ldap-mapper",
+  "config": {
+    "ldap.attribute": ["{{ ldap }}"],
+    "user.model.attribute": ["{{ model }}"],
+    "read.only": ["true"],
+    "always.read.value.from.ldap": ["true"],
+    "is.mandatory.in.ldap": ["{{ mandatory }}"]
+  }
+}
+{%- endmacro -%}
+{
+  "realm": "ia",
+  "displayName": "Assistant IA",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "failureFactor": 5,
+  "permanentLockout": false,
+  "maxFailureWaitSeconds": 900,
+  "waitIncrementSeconds": 60,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 28800,
+  "ssoSessionMaxLifespan": 36000,
+  "internationalizationEnabled": true,
+  "supportedLocales": ["fr", "en"],
+  "defaultLocale": "fr",
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA1",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "eventsEnabled": true,
+  "eventsExpiration": {{ ia_keycloak_events_retention_seconds }},
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": false,
+  "clients": [
+    {{ client('open-webui', 'Assistant IA', 'OIDC_SECRET_OPENWEBUI', 'https://' ~ ia_fqdn_chat ~ '/oauth/oidc/callback', 'https://' ~ ia_fqdn_chat) }},
+    {{ client('grafana', 'Grafana', 'OIDC_SECRET_GRAFANA', 'https://' ~ ia_fqdn_grafana ~ '/login/generic_oauth', 'https://' ~ ia_fqdn_grafana) }},
+    {{ client('langfuse', 'Langfuse', 'OIDC_SECRET_LANGFUSE', 'https://' ~ ia_fqdn_langfuse ~ '/api/auth/callback/keycloak', 'https://' ~ ia_fqdn_langfuse) }}
+  ]{% if ia_ldap_enabled | bool %},
+  "components": {
+    "org.keycloak.storage.UserStorageProvider": [
+      {
+        "name": "annuaire",
+        "providerId": "ldap",
+        "config": {
+          "enabled": ["true"],
+          "priority": ["0"],
+          "vendor": ["{{ ia_ldap_vendor }}"],
+          "connectionUrl": ["{{ ia_ldap_url }}"],
+          "bindDn": ["{{ ia_ldap_bind_dn }}"],
+          "bindCredential": ["${LDAP_BIND_PASSWORD}"],
+          "authType": ["simple"],
+          "startTls": ["false"],
+          "useTruststoreSpi": ["always"],
+          "usersDn": ["{{ ia_ldap_users_dn }}"],
+          "searchScope": ["2"],
+          "pagination": ["true"],
+          "usernameLDAPAttribute": ["{{ ia_ldap_username_attribute }}"],
+          "rdnLDAPAttribute": ["{{ ia_ldap_rdn_attribute }}"],
+          "uuidLDAPAttribute": ["{{ ia_ldap_uuid_attribute }}"],
+          "userObjectClasses": ["{{ ia_ldap_user_object_classes }}"],
+{% if ia_ldap_user_filter | length > 0 %}
+          "customUserSearchFilter": ["{{ ia_ldap_user_filter }}"],
+{% endif %}
+          "editMode": ["READ_ONLY"],
+          "importEnabled": ["true"],
+          "syncRegistrations": ["false"],
+          "trustEmail": ["true"],
+          "cachePolicy": ["NO_CACHE"],
+          "fullSyncPeriod": ["{{ ia_ldap_full_sync_seconds }}"],
+          "changedSyncPeriod": ["{{ ia_ldap_changed_sync_seconds }}"],
+          "batchSizeForSync": ["1000"]
+        },
+        "subComponents": {
+          "org.keycloak.storage.ldap.mappers.LDAPStorageMapper": [
+            {{ attr_mapper('username', ia_ldap_username_attribute, 'username', 'true') }},
+            {{ attr_mapper('email', 'mail', 'email', 'false') }},
+            {{ attr_mapper('first name', 'givenName', 'firstName', 'false') }},
+            {{ attr_mapper('last name', 'sn', 'lastName', 'false') }},
+            {
+              "name": "etat du compte AD",
+              "providerId": "msad-user-account-control-mapper",
+              "config": {"always.read.enabled.from.ldap": ["true"]}
+            },
+            {
+              "name": "groupes AD",
+              "providerId": "group-ldap-mapper",
+              "config": {
+                "mode": ["READ_ONLY"],
+                "groups.dn": ["{{ ia_ldap_groups_dn }}"],
+                "group.name.ldap.attribute": ["cn"],
+                "group.object.classes": ["group"],
+                "membership.ldap.attribute": ["member"],
+                "membership.attribute.type": ["DN"],
+                "membership.user.ldap.attribute": ["{{ ia_ldap_username_attribute }}"],
+                "preserve.group.inheritance": ["false"],
+                "ignore.missing.groups": ["true"],
+                "user.roles.retrieve.strategy": ["LOAD_GROUPS_BY_MEMBER_ATTRIBUTE_RECURSIVELY"],
+                "memberof.ldap.attribute": ["memberOf"],
+                "drop.non.existing.groups.during.sync": ["false"]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }{% endif %}
+
+}
