@@ -55,6 +55,11 @@ Et ce qui relève de l'organisation : AIPD, registre, CSE, charte, pentest, comi
 - **Contenu des conversations non journalisé** (`ia_log_conversation_content: false`) : seules
   les métadonnées sont gardées. La roadmap demande de tracer « qui, quoi, quand » : si le
   « quoi » doit inclure le texte, c'est une décision pour le DPO et le CSE, pas un défaut.
+  Cela vaut pour Langfuse et les journaux de LiteLLM uniquement.
+- **Lecture des conversations par les administrateurs** : maintenue volontairement. Open WebUI
+  conserve l'historique et ses administrateurs peuvent le lire (`ENABLE_ADMIN_CHAT_ACCESS`, à
+  sa valeur par défaut). Les employés doivent en être informés (DPO, CSE, guide employés).
+- **Durée de conservation des conversations** : aucune purge n'est configurée dans Open WebUI.
 - **Licence d'Open WebUI** : sa clause sur la marque est à relire au-delà de 50 utilisateurs.
 - **Modèles Qwen et DeepSeek** : écartés par défaut en attendant la décision interne.
 

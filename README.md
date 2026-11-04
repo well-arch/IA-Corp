@@ -39,6 +39,9 @@ make verify ENV=prod        # teste la plateforme de bout en bout
 
 - [`docs/deploiement.md`](docs/deploiement.md) : prérequis, valeurs à fournir, procédure
 - [`docs/exploitation.md`](docs/exploitation.md) : mises à jour, sauvegardes, rotation, incidents
+- [`docs/guide-ad.md`](docs/guide-ad.md) : raccordement à Active Directory, gestes courants
+- [`docs/guide-employes.md`](docs/guide-employes.md) : première connexion et bon usage, à
+  compléter et à faire valider avant diffusion
 - [`docs/couverture-roadmap.md`](docs/couverture-roadmap.md) : ce qui est couvert, ce qui
   reste à faire et ce qui a réellement été testé
 - [`docs/roadmap.md`](docs/roadmap.md) : la feuille de route d'origine
